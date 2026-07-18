@@ -1,5 +1,4 @@
-<img width="536" height="234" alt="01-terraform-plan" src="https://github.com/user-attachments/assets/dce4280e-0eaa-4ba9-832e-826432a98cc8" />
-# Azure Active Directory Domain Controller — Terraform Deployment
+## Azure Active Directory Domain Controller — Terraform Deployment
 
 ## WATCH ME BUILD IT --> https://canva.link/lw1ipeqlr0uz8hu
 
@@ -137,13 +136,13 @@ terraform apply
 
 Apply takes roughly 8–13 minutes total: VM provisioning (~5–8 min), followed by the AD DS installation and automatic reboot (~3–5 min).
 
-**Clean `terraform plan` output — 9 resources queued, no errors:**
+**Clean `terraform plan` output — 8 resources queued, no errors:**
 
-![Terraform plan output](screenshots/01-terraform-plan.png)
+ <img width="536" height="234" alt="01-terraform-plan" src="https://github.com/user-attachments/assets/dce4280e-0eaa-4ba9-832e-826432a98cc8" />
 
 **Successful `terraform apply` — resources created and outputs printed:**
 
-![Terraform apply complete](screenshots/02-terraform-apply-complete.jpg)
+<img width="464" height="288" alt="Screenshot 2026-07-18 232957" src="https://github.com/user-attachments/assets/9b7c57b6-281b-4491-9f87-02bab1db52ea" />
 
 Once complete, Terraform prints the public IP, domain name, and admin username as outputs. Connect via RDP:
 
@@ -185,11 +184,13 @@ Real issues encountered during deployment, along with root cause and resolution.
 ### 2. VM size unavailable — `SkuNotAvailable`
 **Cause:** Regional capacity exhaustion — `Standard_D2s_v3`, then `Standard_B2s`, then `Standard_B2ms` were all temporarily out of stock in `uksouth` (common on trial subscriptions, which get lower capacity priority).
 
-![SkuNotAvailable error](screenshots/03-sku-not-available.jpg)
+<img width="1802" height="1642" alt="03-sku-not-available" src="https://github.com/user-attachments/assets/3ece2b68-b69a-47fa-bb2d-da240831d3a8" />
+
 
 **Fix:** Verified available sizes manually via the Azure Portal's VM size picker, then moved the deployment to **West Europe, Availability Zone 3**, which had confirmed capacity for `Standard_D2s_v3`.
 
-![Azure Portal VM size picker](screenshots/04-vm-size-picker.jpg)
+<img width="1848" height="2292" alt="04-vm-size-picker" src="https://github.com/user-attachments/assets/27e60339-72d0-42e4-8d33-78d4a3e963fa" />
+
 
 ### 3. Quota confusion — "0 vCPUs of 4 remain"
 **Cause:** Initially looked like a hard blocker; `az vm list-usage` confirmed 0 vCPUs were actually in use at the time. The warning referred to total subscription capacity, not something already consuming it.
@@ -201,12 +202,16 @@ Real issues encountered during deployment, along with root cause and resolution.
 
 ### 5. Intermittent `404 ResourceNotFound` on the Virtual Network mid-apply
 
-![VNet 404 ResourceNotFound error](screenshots/05-vnet-404-error.jpg)
+<img width="1755" height="394" alt="Screenshot 2026-07-10 040433" src="https://github.com/user-attachments/assets/d5b8ec01-fc75-415d-aeff-4dc2730e25a3" />
+
 
 **Cause:** Azure Resource Manager propagation lag — the VNet was actually created successfully, but a near-simultaneous status check from Terraform hit a stale 404 before Azure's API had caught up.
 **Fix:** Re-ran `terraform apply`. Azure then correctly reported the VNet "already exists," so `terraform import` was used to reconcile Terraform's state with the resource that had, in fact, been created:
 
-![Terraform import successful](screenshots/06-terraform-import-success.jpg)
+<img width="1703" height="1468" alt="06-terraform-import-success" src="https://github.com/user-attachments/assets/0f2e6703-a415-460a-b713-58eb375c5cc9" />
+
+
+
 
 ```powershell
 terraform import azurerm_virtual_network.main /subscriptions/<sub-id>/resourceGroups/rg-ad-veronika/providers/Microsoft.Network/virtualNetworks/vnet-ad-veronika
@@ -216,13 +221,16 @@ terraform import azurerm_virtual_network.main /subscriptions/<sub-id>/resourceGr
 **Root cause:** The project folder was inside a **OneDrive-synced directory**, and OneDrive sync was still active. OneDrive was periodically re-syncing `terraform.tfstate` in the background, silently reverting it to an older synced copy immediately after each successful import wrote the new state.
 **Fix:** Paused OneDrive sync for the folder (no relocation needed). Re-ran the import once more, and the state held correctly on every subsequent `apply`:
 
-![Apply complete after disabling OneDrive sync](screenshots/07-onedrive-fix-apply-complete.jpg)
+<img width="1762" height="446" alt="Screenshot 2026-07-10 040749" src="https://github.com/user-attachments/assets/1db8250c-7239-4394-be78-b794067b8905" />
+
 
 **Lesson:** A Terraform working directory doesn't need to live outside a cloud-sync folder permanently, but sync must be paused for that folder while Terraform is actively writing to `terraform.tfstate` — otherwise the sync client can race with Terraform and silently revert the state file.
 
 ### 7. RDP login failed — "Your credentials did not work"
 
-![RDP credentials did not work](screenshots/08-rdp-credentials-failed.jpg)
+<img width="1848" height="2341" alt="08-rdp-credentials-failed" src="https://github.com/user-attachments/assets/5627341f-4eee-409b-993d-27fa7520a161" />
+
+
 
 **Diagnosis:** Used Azure Portal → VM → **Run command → RunPowerShellScript** to confirm the domain controller itself was healthy without needing a working RDP session:
 
@@ -231,13 +239,15 @@ Get-Service NTDS -ErrorAction SilentlyContinue | Select Name, Status
 Get-WindowsFeature AD-Domain-Services | Select Name, InstallState
 ```
 
-![Run Command confirming NTDS running and AD DS installed](screenshots/09-run-command-ntds-status.jpg)
+<img width="1848" height="2391" alt="09-run-command-ntds-status" src="https://github.com/user-attachments/assets/26395f78-c16f-4511-b46a-da98e2836de2" />
+
+
 
 ```powershell
 Get-ADUser -Identity adadmin -Properties LockedOut, Enabled
 ```
+<img width="1848" height="2241" alt="10-run-command-aduser-check" src="https://github.com/user-attachments/assets/94e1e9ac-2972-47d3-8efa-04ff16b99329" />
 
-![Run Command confirming adadmin account enabled and not locked out](screenshots/10-run-command-aduser-check.jpg)
 
 This confirmed `NTDS: Running`, AD DS installed, and the `adadmin` account `Enabled: True`, `LockedOut: False` — ruling out a broken domain and isolating the issue to the credential itself (likely a UK/US keyboard layout mismatch affecting special characters like `@`).
 
