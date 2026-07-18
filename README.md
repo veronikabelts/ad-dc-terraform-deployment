@@ -1,6 +1,6 @@
 # Azure Active Directory Domain Controller — Terraform Deployment
 
-## WATCH ME BUILD IT https://canva.link/lw1ipeqlr0uz8hu
+## WATCH ME BUILD IT 
 
 **Infrastructure-as-Code lab:** provisioning a Windows Server 2022 Active Directory Domain Controller on Azure using Terraform, with a fully automated AD DS installation and forest promotion.
 
@@ -110,6 +110,7 @@ az-ad-vm/
 ├── outputs.tf                  # Public IP, domain name, admin username outputs
 ├── terraform.tfvars.example    # Sample values — copy to terraform.tfvars and edit
 ├── .gitignore                  # Excludes terraform.tfvars, .terraform/, state files
+├── screenshots/                # Deployment evidence referenced below
 └── README.md
 ```
 
@@ -134,6 +135,14 @@ terraform apply
 ```
 
 Apply takes roughly 8–13 minutes total: VM provisioning (~5–8 min), followed by the AD DS installation and automatic reboot (~3–5 min).
+
+**Clean `terraform plan` output — 9 resources queued, no errors:**
+
+![Terraform plan output](screenshots/01-terraform-plan.jpg)
+
+**Successful `terraform apply` — resources created and outputs printed:**
+
+![Terraform apply complete](screenshots/02-terraform-apply-complete.jpg)
 
 Once complete, Terraform prints the public IP, domain name, and admin username as outputs. Connect via RDP:
 
@@ -168,21 +177,82 @@ All four commands returned clean output with no errors, confirming:
 
 Real issues encountered during deployment, along with root cause and resolution. Included deliberately — diagnosing infrastructure failures is as core to this skill set as a clean deployment.
 
-| # | Issue | Root Cause | Resolution |
-|---|---|---|---|
-| 1 | `az login` failed with `AADSTS50076` | MFA prompt wasn't completed before the browser session closed | Re-ran `az login`, completed MFA fully, confirmed with `az account show` |
-| 2 | `SkuNotAvailable` for `Standard_D2s_v3`, then `Standard_B2s`, then `Standard_B2ms` | Regional capacity exhaustion for those sizes in `uksouth` (common on trial subscriptions) | Verified availability manually in the Portal's VM size picker; moved deployment to **West Europe, Zone 3**, which had confirmed capacity |
-| 3 | Portal showed "0 vCPUs of 4 remain" | Misread as a hard blocker; `az vm list-usage` confirmed 0 vCPUs were actually in use | No action needed — resolved once the correct region/size combination was in place |
-| 4 | `terraform.tfvars` location value rejected | Pasted the Portal's display label (`"(Europe) West Europe"`) instead of the CLI region code | Corrected to `location = "westeurope"` |
-| 5 | Intermittent `404 ResourceNotFound` on the Virtual Network mid-apply | Azure Resource Manager propagation lag — the VNet was created successfully but a near-simultaneous status check returned a stale 404 | Re-ran `apply`; used `terraform import` to reconcile Terraform's state with the VNet that had, in fact, been created |
-| 6 | Import kept "not sticking" — same conflict on every subsequent apply | **OneDrive sync** was active on the project folder, silently reverting `terraform.tfstate` to an older synced version after each write | Disabled OneDrive sync for the folder (no relocation needed); state held correctly from that point on |
-| 7 | RDP: "Your credentials did not work" | Domain controller was confirmed healthy via Azure **Run Command** (`NTDS: Running`, AD DS installed, account `Enabled`/not locked out) — issue was isolated to the credential itself, likely a keyboard-layout mismatch on special characters | Used Run Command to reset the domain password directly on the VM (`net user adadmin "<password>" /domain`), then logged in successfully |
+### 1. `az login` failed with `AADSTS50076` (MFA required)
+**Cause:** The MFA prompt wasn't completed before the browser session closed, so Azure CLI couldn't retrieve any subscriptions.
+**Fix:** Re-ran `az login`, completed MFA fully, confirmed with `az account show`.
+
+### 2. VM size unavailable — `SkuNotAvailable`
+**Cause:** Regional capacity exhaustion — `Standard_D2s_v3`, then `Standard_B2s`, then `Standard_B2ms` were all temporarily out of stock in `uksouth` (common on trial subscriptions, which get lower capacity priority).
+
+![SkuNotAvailable error](screenshots/03-sku-not-available.jpg)
+
+**Fix:** Verified available sizes manually via the Azure Portal's VM size picker, then moved the deployment to **West Europe, Availability Zone 3**, which had confirmed capacity for `Standard_D2s_v3`.
+
+![Azure Portal VM size picker](screenshots/04-vm-size-picker.jpg)
+
+### 3. Quota confusion — "0 vCPUs of 4 remain"
+**Cause:** Initially looked like a hard blocker; `az vm list-usage` confirmed 0 vCPUs were actually in use at the time. The warning referred to total subscription capacity, not something already consuming it.
+**Fix:** No remediation needed — resolved automatically once the correct size/region/zone combination was in place (see #2).
+
+### 4. `terraform.tfvars` location value in the wrong format
+**Cause:** Pasted the Azure Portal's human-readable label (`"(Europe) West Europe"`) directly into `terraform.tfvars` instead of the CLI region code.
+**Fix:** Corrected to `location = "westeurope"`, verified with `Select-String -Path terraform.tfvars -Pattern "location"`.
+
+### 5. Intermittent `404 ResourceNotFound` on the Virtual Network mid-apply
+
+![VNet 404 ResourceNotFound error](screenshots/05-vnet-404-error.jpg)
+
+**Cause:** Azure Resource Manager propagation lag — the VNet was actually created successfully, but a near-simultaneous status check from Terraform hit a stale 404 before Azure's API had caught up.
+**Fix:** Re-ran `terraform apply`. Azure then correctly reported the VNet "already exists," so `terraform import` was used to reconcile Terraform's state with the resource that had, in fact, been created:
+
+![Terraform import successful](screenshots/06-terraform-import-success.jpg)
+
+```powershell
+terraform import azurerm_virtual_network.main /subscriptions/<sub-id>/resourceGroups/rg-ad-veronika/providers/Microsoft.Network/virtualNetworks/vnet-ad-veronika
+```
+
+### 6. Same import/apply cycle repeating — state kept "forgetting" the VNet
+**Root cause:** The project folder was inside a **OneDrive-synced directory**, and OneDrive sync was still active. OneDrive was periodically re-syncing `terraform.tfstate` in the background, silently reverting it to an older synced copy immediately after each successful import wrote the new state.
+**Fix:** Paused OneDrive sync for the folder (no relocation needed). Re-ran the import once more, and the state held correctly on every subsequent `apply`:
+
+![Apply complete after disabling OneDrive sync](screenshots/07-onedrive-fix-apply-complete.jpg)
+
+**Lesson:** A Terraform working directory doesn't need to live outside a cloud-sync folder permanently, but sync must be paused for that folder while Terraform is actively writing to `terraform.tfstate` — otherwise the sync client can race with Terraform and silently revert the state file.
+
+### 7. RDP login failed — "Your credentials did not work"
+
+![RDP credentials did not work](screenshots/08-rdp-credentials-failed.jpg)
+
+**Diagnosis:** Used Azure Portal → VM → **Run command → RunPowerShellScript** to confirm the domain controller itself was healthy without needing a working RDP session:
+
+```powershell
+Get-Service NTDS -ErrorAction SilentlyContinue | Select Name, Status
+Get-WindowsFeature AD-Domain-Services | Select Name, InstallState
+```
+
+![Run Command confirming NTDS running and AD DS installed](screenshots/09-run-command-ntds-status.jpg)
+
+```powershell
+Get-ADUser -Identity adadmin -Properties LockedOut, Enabled
+```
+
+![Run Command confirming adadmin account enabled and not locked out](screenshots/10-run-command-aduser-check.jpg)
+
+This confirmed `NTDS: Running`, AD DS installed, and the `adadmin` account `Enabled: True`, `LockedOut: False` — ruling out a broken domain and isolating the issue to the credential itself (likely a UK/US keyboard layout mismatch affecting special characters like `@`).
+
+**Fix:** Used Run Command to reset the domain admin password directly on the VM, bypassing RDP entirely:
+
+```powershell
+net user adadmin "<new-password>" /domain
+```
+
+Logged in successfully afterward using `CORP\adadmin` with the freshly-set password.
 
 ### Key Lessons
 
-- **Regional VM capacity ≠ subscription quota.** These are two independent constraints and need to be diagnosed separately — a `SkuNotAvailable` error doesn't necessarily mean you're out of quota.
-- **Cloud-synced folders (OneDrive, Dropbox, Google Drive) are a real hazard for stateful tools.** Any tool that manages its own state file — Terraform included — needs exclusive, uninterrupted write access. Pause sync for that folder while the tool is active.
-- **Azure's Run Command feature is a powerful diagnostic tool.** It allowed verifying AD DS health and resetting a domain password entirely through the Azure control plane, without needing a working RDP session first — useful for troubleshooting VM-level issues from a "outside-in" angle.
+- **Regional VM capacity ≠ subscription quota.** These are two independent constraints and need to be diagnosed separately.
+- **Cloud-synced folders (OneDrive, Dropbox, Google Drive) are a real hazard for stateful tools.** Any tool that manages its own state file — Terraform included — needs exclusive, uninterrupted write access while it's running.
+- **Azure's Run Command feature is a powerful diagnostic tool.** It allowed verifying AD DS health and resetting a domain password entirely through the Azure control plane, without needing a working RDP session first.
 
 ---
 
